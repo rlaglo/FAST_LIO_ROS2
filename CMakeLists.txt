@@ -61,6 +61,7 @@ find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(px4_msgs REQUIRED)
 
 set(dependencies
   rclcpp
@@ -74,6 +75,7 @@ set(dependencies
   pcl_ros
   pcl_conversions
   livox_ros_driver2
+  px4_msgs
 )
 
 # Thirdparty libraries
@@ -101,6 +103,16 @@ target_include_directories(fastlio_mapping PUBLIC
 target_link_libraries(fastlio_mapping ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} Eigen3::Eigen)
 target_include_directories(fastlio_mapping PRIVATE ${PYTHON_INCLUDE_DIRS})
 
+
+add_executable(gz_convert src/gz_convert.cpp)
+target_include_directories(gz_convert PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${PCL_INCLUDE_DIRS}
+)
+target_link_libraries(gz_convert ${PCL_LIBRARIES})
+target_include_directories(gz_convert PRIVATE ${PYTHON_INCLUDE_DIRS})
+
 list(APPEND EOL_LIST "foxy" "galactic" "eloquent" "dashing" "crystal")
 
 if($ENV{ROS_DISTRO} IN_LIST EOL_LIST)
@@ -114,9 +126,13 @@ else()
 endif()
 
 ament_target_dependencies(fastlio_mapping ${dependencies})
+ament_target_dependencies(gz_convert ${dependencies})
 
 # ---------------- Install --------------- #
 install(TARGETS fastlio_mapping
+  DESTINATION lib/${PROJECT_NAME}
+)
+  install(TARGETS gz_convert
   DESTINATION lib/${PROJECT_NAME}
 )
 
