@@ -12,19 +12,23 @@
         common:
             input_cloud_topic: "/lidar/points"
             lid_topic:  "/lio/raw_points"
-            imu_topic:  "/world/tugbot_depot/model/x500_lidar_down_0/link/base_link/sensor/imu_sensor/imu"
+            imu_topic:  "/imu/data"
             time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
             time_offset_lidar_to_imu: 0.0 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
                                         # This param will take effect no matter what time_sync_en is. So if the time offset is not known exactly, please set as 0.0
+
+        simulator:
+            scan_rate: 10.0
+            min_vertical_angle_deg: -15.0
+            max_vertical_angle_deg: 15.0
+            max_range: 10.0
 
         preprocess:
             lidar_type: 2                # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR, 
             scan_line: 16
             scan_rate: 10                # only need to be set for velodyne, unit: Hz,
-            # 드론 라이다가 10hz, 0.1초 단위 time이 들어가고,
-            # fast lio가 한 스캔 전체를 보는 단위가 이 밑에 거
             timestamp_unit: 0            # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
-            blind: 2.0
+            blind: 1.0                   # discard points closer than 1.0 m
 
         mapping:
             acc_cov: 0.1
@@ -44,7 +48,7 @@
             scan_publish_en:  true       # false: close all the point cloud output
             dense_publish_en: true       # false: low down the points number in a global-frame point clouds scan.
             scan_bodyframe_pub_en: true  # true: output the point cloud scans in IMU-body-frame
-            map_en: true   # src에 lasermap내놓는 거 주석 해체 후 추가함
+            map_en: true
              
         pcd_save:
             pcd_save_en: false

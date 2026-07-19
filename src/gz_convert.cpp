@@ -1,112 +1,141 @@
+#include <cmath>
+#include <cstdint>
+#include <functional>
+#include <string>
+
+#include <pcl/common/angles.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl_conversions/pcl_conversions.h>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <vector>
-#include <string>   
-#include <pcl_conversions/pcl_conversions.h>
-#include <pcl/point_types.h>
-#include <pcl/point_cloud.h>
-#include <pcl/common/angles.h> 
 
-
-// ring 만드는 법
-// ring = floor((angle + FOV/2) / vertical_resolution);
-
-// time 만드는 법: 반복문 시작시간 ~~ hz 만큼 균등분배
 struct PointXYZIRT
 {
   PCL_ADD_POINT4D;
   float intensity;
-  uint16_t ring;
+  std::uint16_t ring;
   float time;
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 } EIGEN_ALIGN16;
 
-POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZIRT,
-    (float, x, x)
-    (float, y, y)
-    (float, z, z)
-    (float, intensity, intensity)
-    (uint16_t, ring, ring)
-    (float, time, time)
-)
-// T* ptr; 
-// ptr은 주소값, *ptr은 객체 자체, &ptr은 ptr의 주소값: &는 원본값을 가리키는 거임
-// &a = x라고 하면, a를 x의 별명으로 정하는 거임, 주소값은 아님
-// 실제 객체면 .으로 접근, 포인터면 ->로 접근
-// Iterate over XYZ
+POINT_CLOUD_REGISTER_POINT_STRUCT(
+  PointXYZIRT,
+  (float, x, x)(float, y, y)(float, z, z)(float, intensity, intensity)(
+    std::uint16_t, ring,
+    ring)(float, time, time))
 
-class PcdConverter : public rclcpp::Node
+class GazeboPointCloudConverter : public rclcpp::Node
 {
 public:
-    PcdConverter() : Node("pcdconverter_node")
-    {
-        this->declare_parameter<std::string>("input_cloud_topic", "/lidar/points");
-        this->declare_parameter<std::string>("lid_topic", "/lio/raw_points");
+  GazeboPointCloudConverter()
+  : Node("gazebo_pointcloud_converter")
+  {
+    declare_parameter<std::string>("common.input_cloud_topic", "/lidar/points");
+    declare_parameter<std::string>("common.lid_topic", "/lio/raw_points");
+    declare_parameter<double>("simulator.scan_rate", 10.0);
+    declare_parameter<double>("simulator.min_vertical_angle_deg", -15.0);
+    declare_parameter<double>("simulator.max_vertical_angle_deg", 15.0);
+    declare_parameter<double>("simulator.max_range", 10.0);
 
-        this->get_parameter("input_cloud_topic", in_topic_);
-        this->get_parameter("lid_topic", out_topic_);
+    input_topic_ = get_parameter("common.input_cloud_topic").as_string();
+    output_topic_ = get_parameter("common.lid_topic").as_string();
+    scan_rate_ = get_parameter("simulator.scan_rate").as_double();
+    min_vertical_angle_deg_ =
+      get_parameter("simulator.min_vertical_angle_deg").as_double();
+    max_vertical_angle_deg_ =
+      get_parameter("simulator.max_vertical_angle_deg").as_double();
+    max_range_ = get_parameter("simulator.max_range").as_double();
 
-        pub_ =  this->create_publisher<sensor_msgs::msg::PointCloud2>(out_topic_, 10);
-        sub_ =  this->create_subscription<sensor_msgs::msg::PointCloud2>(in_topic_,10,std::bind(&PcdConverter::callbackFcn,this,std::placeholders::_1));
-    }
+    publisher_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      output_topic_, rclcpp::SensorDataQoS());
+    subscription_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+      input_topic_, rclcpp::SensorDataQoS(),
+      std::bind(&GazeboPointCloudConverter::convert, this, std::placeholders::_1));
+  }
+
 private:
-    std::string out_topic_;
-    std::string in_topic_;
-    void callbackFcn(const sensor_msgs::msg::PointCloud2::SharedPtr msg) // sharedptr는 주소값. msg는 주소값
+  void convert(const sensor_msgs::msg::PointCloud2::SharedPtr message)
+  {
+    pcl::PointCloud<pcl::PointXYZ> input;
+    pcl::fromROSMsg(*message, input);
+
+    if (
+      input.empty() || input.width < 2 || input.height < 2 || scan_rate_ <= 0.0 ||
+      max_range_ <= 0.0 || min_vertical_angle_deg_ >= max_vertical_angle_deg_)
     {
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>()); // Ptr도 주소값. cloud는 주소값
-        pcl::fromROSMsg(*msg, *cloud);
-
-        pcl::PointCloud<PointXYZIRT>::Ptr output(new pcl::PointCloud<PointXYZIRT>());
-        output->points.resize(cloud->points.size());
-        const float scan_time = 0.1; //hz의 역수였나 내 sdf에서는 10 hz
-        const int num_rings = 16; // vertical sample
-        //const double hor_sample = 1800;
-        const double min_angle_rad = -0.2618;   // -15도
-        const double max_angle_rad = 0.2618;    // 15도
-        const double v_fov_rad = max_angle_rad - min_angle_rad;
-        uint32_t width = cloud->width; //즉 horizontal sample
-        // vertical = 1800, height = 16
-        // gz에서 넘어온 거 width=horizontal sample, height=vertical sample로 돼 있다고 함
-        for (size_t i = 0; i< cloud->points.size();i++)
-        {
-            auto &p = cloud->points[i];
-            auto &q = output->points[i];
-            
-            q.x = p.x;
-            q.y = p.y;
-            q.z = p.z;
-            q.intensity = 1.0;
-            
-            // NaN 체크 (필수 예외 처리) 좋다고 함
-            if (std::isnan(p.x) || std::isnan(p.y) || std::isnan(p.z)) {
-                q.ring = 0;
-                q.time = 0.0;
-                continue;
-            }
-
-            //float angle std::atan2(p.z, std::sqrt(p.x*p.x + p.y*p.y));
-            //q.ring = static_cast<uint16_t>(std::max(0,std::min(num_rings-1,ring)));
-            q.ring = static_cast<uint16_t>(i / width);
-
-            // t는 1800등분 되는 건데, 
-            int col_idx = i % width; // 이건 0~1800 0~1800 0~1800 반복함
-            q.time = scan_time * (static_cast<double>(col_idx) / static_cast<double>(width));
-        }
-        sensor_msgs::msg::PointCloud2 out_msg;
-        pcl::toROSMsg(*output, out_msg);
-        out_msg.header.stamp = msg->header.stamp;
-        out_msg.header.frame_id = msg->header.frame_id;
-        pub_->publish(out_msg);
+      RCLCPP_WARN(
+        get_logger(),
+        "Invalid organized cloud or LiDAR parameters (width=%u, height=%u)",
+        input.width, input.height);
+      return;
     }
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_;
+
+    pcl::PointCloud<PointXYZIRT> output;
+    output.resize(input.size());
+    output.width = input.width;
+    output.height = input.height;
+    output.is_dense = true;
+
+    const double scan_time = 1.0 / scan_rate_;
+    const std::size_t ring_count = input.height;
+    const std::size_t column_count = input.width;
+    const double min_vertical_angle = pcl::deg2rad(min_vertical_angle_deg_);
+    const double vertical_fov =
+      pcl::deg2rad(max_vertical_angle_deg_) - min_vertical_angle;
+    const double clearing_range = max_range_ + 0.01;
+
+    for (std::size_t index = 0; index < input.size(); ++index) {
+      const auto & source = input[index];
+      auto & target = output[index];
+      const std::size_t ring = index / column_count;
+      const std::size_t column = index % column_count;
+
+      target.x = source.x;
+      target.y = source.y;
+      target.z = source.z;
+      target.intensity = 1.0F;
+      target.ring = static_cast<std::uint16_t>(ring);
+      target.time = static_cast<float>(
+        scan_time * static_cast<double>(column) / static_cast<double>(column_count));
+
+      if (!std::isfinite(source.x) || !std::isfinite(source.y) || !std::isfinite(source.z)) {
+        const double horizontal_angle =
+          -M_PI + 2.0 * M_PI * static_cast<double>(column) /
+          static_cast<double>(column_count - 1);
+        const double vertical_angle =
+          min_vertical_angle + vertical_fov * static_cast<double>(ring) /
+          static_cast<double>(ring_count - 1);
+
+        target.x = static_cast<float>(
+          clearing_range * std::cos(vertical_angle) * std::cos(horizontal_angle));
+        target.y = static_cast<float>(
+          clearing_range * std::cos(vertical_angle) * std::sin(horizontal_angle));
+        target.z = static_cast<float>(clearing_range * std::sin(vertical_angle));
+        target.intensity = -1.0F;
+      }
+    }
+
+    sensor_msgs::msg::PointCloud2 converted;
+    pcl::toROSMsg(output, converted);
+    converted.header = message->header;
+    publisher_->publish(converted);
+  }
+
+  std::string input_topic_;
+  std::string output_topic_;
+  double scan_rate_;
+  double min_vertical_angle_deg_;
+  double max_vertical_angle_deg_;
+  double max_range_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher_;
 };
 
-int main(int argc, char **argv)
+int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<PcdConverter>());
+  rclcpp::spin(std::make_shared<GazeboPointCloudConverter>());
   rclcpp::shutdown();
   return 0;
 }
