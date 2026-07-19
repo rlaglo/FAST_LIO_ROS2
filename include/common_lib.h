@@ -56,10 +56,12 @@ struct MeasureGroup     // Lidar data and imu dates for the curent process
     {
         lidar_beg_time = 0.0;
         this->lidar.reset(new PointCloudXYZI());
+        this->clearing.reset(new PointCloudXYZI());
     };
     double lidar_beg_time;
     double lidar_end_time;
     PointCloudXYZI::Ptr lidar;
+    PointCloudXYZI::Ptr clearing;
     deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu;
 };
 

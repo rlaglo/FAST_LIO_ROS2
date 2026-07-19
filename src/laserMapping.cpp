@@ -106,6 +106,7 @@ vector<double>       extrinT(3, 0.0);
 vector<double>       extrinR(9, 0.0);
 deque<double>                     time_buffer;
 deque<PointCloudXYZI::Ptr>        lidar_buffer;
+deque<PointCloudXYZI::Ptr>        clearing_buffer;
 deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu_buffer;
 
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
@@ -290,15 +291,18 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg)
     {
         std::cerr << "lidar loop back, clear buffer" << std::endl;
         lidar_buffer.clear();
+        clearing_buffer.clear();
     }
     if (is_first_lidar)
     {
         is_first_lidar = false;
     }
 
-    PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
-    p_pre->process(msg, ptr);
+    PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
+    PointCloudXYZI::Ptr clearing_ptr(new PointCloudXYZI());
+    p_pre->process(msg, ptr, clearing_ptr);
     lidar_buffer.push_back(ptr);
+    clearing_buffer.push_back(clearing_ptr);
     time_buffer.push_back(cur_time);
     last_timestamp_lidar = cur_time;
     s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
@@ -318,6 +322,7 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg)
     {
         std::cerr << "lidar loop back, clear buffer" << std::endl;
         lidar_buffer.clear();
+        clearing_buffer.clear();
     }
     if(is_first_lidar)
     {
@@ -337,9 +342,11 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg)
         printf("Self sync IMU and LiDAR, time diff is %.10lf \n", timediff_lidar_wrt_imu);
     }
 
-    PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
+    PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
+    PointCloudXYZI::Ptr clearing_ptr(new PointCloudXYZI());
     p_pre->process(msg, ptr);
     lidar_buffer.push_back(ptr);
+    clearing_buffer.push_back(clearing_ptr);
     time_buffer.push_back(last_timestamp_lidar);
     
     s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
@@ -382,7 +389,7 @@ double lidar_mean_scantime = 0.0;
 int    scan_num = 0;
 bool sync_packages(MeasureGroup &meas)
 {
-    if (lidar_buffer.empty() || imu_buffer.empty()) {
+    if (lidar_buffer.empty() || clearing_buffer.empty() || imu_buffer.empty()) {
         return false;
     }
 
@@ -390,6 +397,7 @@ bool sync_packages(MeasureGroup &meas)
     if(!lidar_pushed)
     {
         meas.lidar = lidar_buffer.front();
+        meas.clearing = clearing_buffer.front();
         meas.lidar_beg_time = time_buffer.front();
         if (meas.lidar->points.size() <= 1) // time too little
         {
@@ -429,6 +437,7 @@ bool sync_packages(MeasureGroup &meas)
     }
 
     lidar_buffer.pop_front();
+    clearing_buffer.pop_front();
     time_buffer.pop_front();
     lidar_pushed = false;
     return true;
@@ -545,13 +554,21 @@ void publish_frame_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Share
 
 void publish_frame_body(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudFull_body)
 {
-    int size = feats_undistort->points.size();
+    const int lidar_size = feats_undistort->points.size();
+    const int clearing_size = Measures.clearing->points.size();
+    const int size = lidar_size + clearing_size;
     PointCloudXYZI::Ptr laserCloudIMUBody(new PointCloudXYZI(size, 1));
 
-    for (int i = 0; i < size; i++)
+    for (int i = 0; i < lidar_size; i++)
     {
         RGBpointBodyLidarToIMU(&feats_undistort->points[i], \
                             &laserCloudIMUBody->points[i]);
+    }
+
+    for (int i = 0; i < clearing_size; i++)
+    {
+        RGBpointBodyLidarToIMU(&Measures.clearing->points[i],
+                            &laserCloudIMUBody->points[lidar_size + i]);
     }
 
     sensor_msgs::msg::PointCloud2 laserCloudmsg;

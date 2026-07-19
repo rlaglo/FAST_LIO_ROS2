@@ -50,8 +50,13 @@ void Preprocess::process(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg
   *pcl_out = pl_surf;
 }
 
-void Preprocess::process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, PointCloudXYZI::Ptr& pcl_out)
+void Preprocess::process(
+  const sensor_msgs::msg::PointCloud2::UniquePtr & msg,
+  PointCloudXYZI::Ptr & pcl_out,
+  PointCloudXYZI::Ptr & clearing_out)
 {
+  pl_clearing.clear();
+
   switch (time_unit)
   {
     case SEC:
@@ -90,6 +95,7 @@ void Preprocess::process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, Po
       break;
   }
   *pcl_out = pl_surf;
+  *clearing_out = pl_clearing;
 }
 
 void Preprocess::avia_handler(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg)
@@ -298,6 +304,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::msg::PointCloud2::UniquePtr
   pl_surf.clear();
   pl_corn.clear();
   pl_full.clear();
+  pl_clearing.clear();
 
   pcl::PointCloud<velodyne_ros::Point> pl_orig;
   pcl::fromROSMsg(*msg, pl_orig);
@@ -416,6 +423,25 @@ void Preprocess::velodyne_handler(const sensor_msgs::msg::PointCloud2::UniquePtr
   {
     for (int i = 0; i < plsize; i++)
     {
+      if (pl_orig.points[i].intensity < 0.0F) {
+        if (i % point_filter_num != 0) {
+          continue;
+        }
+
+        PointType clearing_point;
+        clearing_point.x = pl_orig.points[i].x;
+        clearing_point.y = pl_orig.points[i].y;
+        clearing_point.z = pl_orig.points[i].z;
+        clearing_point.intensity = -1.0F;
+        clearing_point.normal_x = 0.0F;
+        clearing_point.normal_y = 0.0F;
+        clearing_point.normal_z = 0.0F;
+        clearing_point.curvature =
+          pl_orig.points[i].time * time_unit_scale;
+
+        pl_clearing.push_back(clearing_point);
+        continue;
+      }
       PointType added_pt;
       // cout<<"!!!!!!"<<i<<" "<<plsize<<endl;
 
